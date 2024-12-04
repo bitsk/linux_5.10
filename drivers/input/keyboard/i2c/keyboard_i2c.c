@@ -215,9 +215,6 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     kbd->client = client;
     kbd->input = input;
     
-    // 初始化自旋锁
-    spin_lock_init(&kbd->lock);
-    
     // 创建专用工作队列
     kbd->wq = create_singlethread_workqueue("keyboard_i2c_wq");
     if (!kbd->wq) {
