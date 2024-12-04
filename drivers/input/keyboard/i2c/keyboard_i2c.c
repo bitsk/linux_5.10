@@ -4,6 +4,7 @@
 #include <linux/timer.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
+#include <linux/i2c-dev.h>
 
 #define KEYBOARD_I2C_NAME "keyboard-i2c"
 #define KEYBOARD_I2C_ADDR 0x5F
@@ -25,10 +26,11 @@ static void keyboard_timer_handler(struct timer_list *t)
     int ret;
 
     if (!mutex_trylock(&kbd->lock)) {
-        goto restart_timer;
+        mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+        return;
     }
 
-    ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
+    ret = i2c_master_recv_timeout(kbd->client, &key_data, KEYBOARD_BUF_SIZE, HZ/10);
     if (ret < 0) {
         dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
         goto unlock;
@@ -81,7 +83,6 @@ static void keyboard_timer_handler(struct timer_list *t)
 
 unlock:
     mutex_unlock(&kbd->lock);
-restart_timer:
     mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 }
 
