@@ -4,12 +4,29 @@
 #include <linux/timer.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
-#include <linux/i2c-dev.h>
+#include <linux/random.h>
+
+// 添加调试开关
+#define DEBUG 1
+
+#if DEBUG
+#define kbd_dbg(dev, fmt, ...) \
+    dev_dbg(dev, "%s: " fmt, __func__, ##__VA_ARGS__)
+#define kbd_info(dev, fmt, ...) \
+    dev_info(dev, "%s: " fmt, __func__, ##__VA_ARGS__)
+#define kbd_err(dev, fmt, ...) \
+    dev_err(dev, "%s: " fmt, __func__, ##__VA_ARGS__)
+#else
+#define kbd_dbg(dev, fmt, ...)
+#define kbd_info(dev, fmt, ...)
+#define kbd_err(dev, fmt, ...)
+#endif
 
 #define KEYBOARD_I2C_NAME "keyboard-i2c"
 #define KEYBOARD_I2C_ADDR 0x5F
 #define KEYBOARD_BUF_SIZE 1   // 每次读取1个字节
-#define POLL_INTERVAL_MS 10   // 10ms轮询间隔
+#define POLL_INTERVAL_MS 20   // 增加轮询间隔到20ms
+#define MAX_RETRIES 3  // 最大重试次数
 
 
 struct keyboard_i2c {
@@ -24,69 +41,100 @@ static void keyboard_timer_handler(struct timer_list *t)
     struct keyboard_i2c *kbd = from_timer(kbd, t, timer);
     u8 key_data;
     int ret;
+    static unsigned long last_read_jiffies;
+    static int total_reads;
+    static int failed_reads;
+
+    // 记录读取间隔
+    if (last_read_jiffies) {
+        kbd_dbg(&kbd->client->dev, "Read interval: %u ms\n", 
+                jiffies_to_msecs(jiffies - last_read_jiffies));
+    }
+    last_read_jiffies = jiffies;
 
     if (!mutex_trylock(&kbd->lock)) {
-        mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+        kbd_dbg(&kbd->client->dev, "Failed to acquire lock, retrying soon\n");
+        mod_timer(&kbd->timer, 
+            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS/2));
         return;
     }
 
-    // 设置I2C适配器超时时间
-    kbd->client->adapter->timeout = HZ/10; // 100ms timeout
-    
+    total_reads++;
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
     if (ret < 0) {
-        dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
-        goto unlock;
+        failed_reads++;
+        kbd_err(&kbd->client->dev, 
+                "i2c read failed: %d (total: %d, failed: %d, success rate: %d%%)\n",
+                ret, total_reads, failed_reads, 
+                ((total_reads - failed_reads) * 100) / total_reads);
+        mutex_unlock(&kbd->lock);
+        mod_timer(&kbd->timer, 
+            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+        return;
     }
 
     if (key_data != 0) {
         int key_code;
         
+        kbd_dbg(&kbd->client->dev, "Received raw key data: 0x%02x\n", key_data);
+        
         // 映射自定义键值到标准Linux键值
         switch(key_data) {
         case 180: // 原KEY_LEFT
             key_code = KEY_LEFT;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_LEFT\n");
             break;
         case 181: // 原KEY_UP
             key_code = KEY_UP;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_UP\n");
             break;
         case 182: // 原KEY_DOWN
             key_code = KEY_DOWN;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_DOWN\n");
             break;
         case 183: // 原KEY_RIGHT
             key_code = KEY_RIGHT;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_RIGHT\n");
             break;
         case 27:  // ESC
             key_code = KEY_ESC;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_ESC\n");
             break;
         case 9:   // TAB
             key_code = KEY_TAB;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_TAB\n");
             break;
         case 13:  // ENTER
             key_code = KEY_ENTER;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_ENTER\n");
             break;
         case 127: // DEL
             key_code = KEY_BACKSPACE;
+            kbd_dbg(&kbd->client->dev, "Mapped to KEY_BACKSPACE\n");
             break;
         default:
-            // ASCII字符
             if (key_data >= 32 && key_data <= 126) {
                 key_code = key_data;
+                kbd_dbg(&kbd->client->dev, "ASCII character: '%c'\n", key_data);
             } else {
+                kbd_dbg(&kbd->client->dev, "Invalid key data: 0x%02x\n", key_data);
                 goto unlock;
             }
             break;
         }
 
+        kbd_dbg(&kbd->client->dev, "Reporting key event: code=%d, value=1\n", key_code);
         input_report_key(kbd->input, key_code, 1);
         input_sync(kbd->input);
+        kbd_dbg(&kbd->client->dev, "Reporting key event: code=%d, value=0\n", key_code);
         input_report_key(kbd->input, key_code, 0);
         input_sync(kbd->input);
     }
 
 unlock:
     mutex_unlock(&kbd->lock);
-    mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+    mod_timer(&kbd->timer, 
+        jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 }
 
 static int keyboard_i2c_probe(struct i2c_client *client,
@@ -143,6 +191,10 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     timer_setup(&kbd->timer, keyboard_timer_handler, 0);
     mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 
+    // 设置I2C客户端参数
+    client->flags |= I2C_CLIENT_WAKE;  // 允许设备唤醒系统
+    client->adapter->retries = 3;      // 设置适配器级别的重试次数
+
     // 注册输入设备
     error = input_register_device(input);
     if (error) {
@@ -152,6 +204,19 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     }
 
     i2c_set_clientdata(client, kbd);
+
+    kbd_info(&client->dev, "Initializing M5Stack CardKB keyboard\n");
+    kbd_dbg(&client->dev, "I2C adapter: %s\n", client->adapter->name);
+    kbd_dbg(&client->dev, "I2C address: 0x%02x\n", client->addr);
+    
+    // 打印I2C适配器功能
+    kbd_dbg(&client->dev, "I2C adapter functionality:\n");
+    kbd_dbg(&client->dev, "  I2C: %s\n", 
+            i2c_check_functionality(client->adapter, I2C_FUNC_I2C) ? "yes" : "no");
+    kbd_dbg(&client->dev, "  SMBUS QUICK: %s\n",
+            i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_QUICK) ? "yes" : "no");
+
+    kbd_info(&client->dev, "Keyboard initialized successfully\n");
     return 0;
 }
 
@@ -189,3 +254,8 @@ module_i2c_driver(keyboard_i2c_driver);
 MODULE_AUTHOR("Your Name");
 MODULE_DESCRIPTION("M5Stack CardKB I2C Keyboard Driver");
 MODULE_LICENSE("GPL");
+
+// 添加模块参数来控制调试级别
+static int debug_level;
+module_param(debug_level, int, 0644);
+MODULE_PARM_DESC(debug_level, "Debug level (0=none, 1=error, 2=info, 3=debug)");
