@@ -30,7 +30,10 @@ static void keyboard_timer_handler(struct timer_list *t)
         return;
     }
 
-    ret = i2c_master_recv_timeout(kbd->client, &key_data, KEYBOARD_BUF_SIZE, HZ/10);
+    // 设置I2C适配器超时时间
+    kbd->client->adapter->timeout = HZ/10; // 100ms timeout
+    
+    ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
     if (ret < 0) {
         dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
         goto unlock;
@@ -110,7 +113,13 @@ static int keyboard_i2c_probe(struct i2c_client *client,
 
     // 设置输入设备参数
     input->name = "M5Stack CardKB";
+    input->phys = "cardkb/input0";
+    input->dev.parent = &client->dev;
+    
     input->id.bustype = BUS_I2C;
+    input->id.vendor = 0x0001;
+    input->id.product = 0x9637;
+    input->id.version = 0x0001;
 
     // 设置支持的按键
     __set_bit(EV_KEY, input->evbit);
