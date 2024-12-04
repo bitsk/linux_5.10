@@ -244,8 +244,19 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     i2c_dbg(&client->dev, "  Retries: %d\n", client->adapter->retries);
     i2c_dbg(&client->dev, "  Timeout: %d ms\n", 
             jiffies_to_msecs(client->adapter->timeout));
-    i2c_dbg(&client->dev, "  Functionality flags: 0x%x\n", 
-            client->adapter->functionality);
+    
+    // 打印I2C适配器功能
+    i2c_dbg(&client->dev, "I2C adapter capabilities:\n");
+    i2c_dbg(&client->dev, "  I2C: %s\n", 
+            i2c_check_functionality(client->adapter, I2C_FUNC_I2C) ? "yes" : "no");
+    i2c_dbg(&client->dev, "  SMBUS BYTE: %s\n",
+            i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE) ? "yes" : "no");
+    i2c_dbg(&client->dev, "  SMBUS BYTE DATA: %s\n",
+            i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA) ? "yes" : "no");
+    i2c_dbg(&client->dev, "  SMBUS WORD DATA: %s\n",
+            i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_WORD_DATA) ? "yes" : "no");
+    i2c_dbg(&client->dev, "  SMBUS BLOCK DATA: %s\n",
+            i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BLOCK_DATA) ? "yes" : "no");
 
     // 注册输入设备
     error = input_register_device(input);
