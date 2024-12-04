@@ -3,29 +3,19 @@
 #include <linux/input.h>
 #include <linux/timer.h>
 #include <linux/mutex.h>
-#include "keyboard_i2c.h"
+#include <linux/delay.h>
 
 #define KEYBOARD_I2C_NAME "keyboard-i2c"
 #define KEYBOARD_I2C_ADDR 0x5F
 #define KEYBOARD_BUF_SIZE 1   // 每次读取1个字节
 #define POLL_INTERVAL_MS 10   // 10ms轮询间隔
 
-// 特殊键值定义
-#define KEY_ESC    27
-#define KEY_DEL    127
-#define KEY_TAB    9
-#define KEY_ENTER  13
-#define KEY_LEFT   180
-#define KEY_UP     181
-#define KEY_DOWN   182
-#define KEY_RIGHT  183
 
-// 在结构体定义中添加互斥锁
 struct keyboard_i2c {
     struct i2c_client *client;
     struct input_dev *input;
     struct timer_list timer;
-    struct mutex lock;  // 添加互斥锁
+    struct mutex lock;
 };
 
 static void keyboard_timer_handler(struct timer_list *t)
@@ -34,88 +24,58 @@ static void keyboard_timer_handler(struct timer_list *t)
     u8 key_data;
     int ret;
 
-    // 尝试获取锁
     if (!mutex_trylock(&kbd->lock)) {
-        // 如果获取不到锁，重新调度定时器
         goto restart_timer;
     }
 
-    // 从I2C设备读取按键数据
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
     if (ret < 0) {
         dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
         goto unlock;
     }
 
-    // 处理按键数据
     if (key_data != 0) {
+        int key_code;
+        
+        // 映射自定义键值到标准Linux键值
         switch(key_data) {
-        case KEY_LEFT:
-            input_report_key(kbd->input, KEY_LEFT, 1);
+        case 180: // 原KEY_LEFT
+            key_code = KEY_LEFT;
             break;
-        case KEY_RIGHT:
-            input_report_key(kbd->input, KEY_RIGHT, 1);
+        case 181: // 原KEY_UP
+            key_code = KEY_UP;
             break;
-        case KEY_UP:
-            input_report_key(kbd->input, KEY_UP, 1);
+        case 182: // 原KEY_DOWN
+            key_code = KEY_DOWN;
             break;
-        case KEY_DOWN:
-            input_report_key(kbd->input, KEY_DOWN, 1);
+        case 183: // 原KEY_RIGHT
+            key_code = KEY_RIGHT;
             break;
-        case KEY_ESC:
-            input_report_key(kbd->input, KEY_ESC, 1);
+        case 27:  // ESC
+            key_code = KEY_ESC;
             break;
-        case KEY_TAB:
-            input_report_key(kbd->input, KEY_TAB, 1);
+        case 9:   // TAB
+            key_code = KEY_TAB;
             break;
-        case KEY_ENTER:
-            input_report_key(kbd->input, KEY_ENTER, 1);
+        case 13:  // ENTER
+            key_code = KEY_ENTER;
             break;
-        case KEY_DEL:
-            input_report_key(kbd->input, KEY_BACKSPACE, 1);
+        case 127: // DEL
+            key_code = KEY_BACKSPACE;
             break;
         default:
-            // 普通ASCII字符
+            // ASCII字符
             if (key_data >= 32 && key_data <= 126) {
-                input_report_key(kbd->input, key_data, 1);
+                key_code = key_data;
+            } else {
+                goto unlock;
             }
             break;
         }
-        input_sync(kbd->input);
 
-        // 释放按键
-        switch(key_data) {
-        case KEY_LEFT:
-            input_report_key(kbd->input, KEY_LEFT, 0);
-            break;
-        case KEY_RIGHT:
-            input_report_key(kbd->input, KEY_RIGHT, 0);
-            break;
-        case KEY_UP:
-            input_report_key(kbd->input, KEY_UP, 0);
-            break;
-        case KEY_DOWN:
-            input_report_key(kbd->input, KEY_DOWN, 0);
-            break;
-        case KEY_ESC:
-            input_report_key(kbd->input, KEY_ESC, 0);
-            break;
-        case KEY_TAB:
-            input_report_key(kbd->input, KEY_TAB, 0);
-            break;
-        case KEY_ENTER:
-            input_report_key(kbd->input, KEY_ENTER, 0);
-            break;
-        case KEY_DEL:
-            input_report_key(kbd->input, KEY_BACKSPACE, 0);
-            break;
-        default:
-            // 普通ASCII字符
-            if (key_data >= 32 && key_data <= 126) {
-                input_report_key(kbd->input, key_data, 0);
-            }
-            break;
-        }
+        input_report_key(kbd->input, key_code, 1);
+        input_sync(kbd->input);
+        input_report_key(kbd->input, key_code, 0);
         input_sync(kbd->input);
     }
 
