@@ -2,6 +2,7 @@
 #include <linux/i2c.h>
 #include <linux/input.h>
 #include <linux/timer.h>
+#include <linux/mutex.h>
 #include "keyboard_i2c.h"
 
 #define KEYBOARD_I2C_NAME "keyboard-i2c"
@@ -19,17 +20,31 @@
 #define KEY_DOWN   182
 #define KEY_RIGHT  183
 
+// 在结构体定义中添加互斥锁
+struct keyboard_i2c {
+    struct i2c_client *client;
+    struct input_dev *input;
+    struct timer_list timer;
+    struct mutex lock;  // 添加互斥锁
+};
+
 static void keyboard_timer_handler(struct timer_list *t)
 {
     struct keyboard_i2c *kbd = from_timer(kbd, t, timer);
     u8 key_data;
     int ret;
 
+    // 尝试获取锁
+    if (!mutex_trylock(&kbd->lock)) {
+        // 如果获取不到锁，重新调度定时器
+        goto restart_timer;
+    }
+
     // 从I2C设备读取按键数据
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
     if (ret < 0) {
-        dev_err(&kbd->client->dev, "i2c read failed\n");
-        goto restart_timer;
+        dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
+        goto unlock;
     }
 
     // 处理按键数据
@@ -104,6 +119,8 @@ static void keyboard_timer_handler(struct timer_list *t)
         input_sync(kbd->input);
     }
 
+unlock:
+    mutex_unlock(&kbd->lock);
 restart_timer:
     mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 }
@@ -126,6 +143,9 @@ static int keyboard_i2c_probe(struct i2c_client *client,
 
     kbd->client = client;
     kbd->input = input;
+    
+    // 初始化互斥锁
+    mutex_init(&kbd->lock);
 
     // 设置输入设备参数
     input->name = "M5Stack CardKB";

@@ -1,0 +1,11 @@
+M5Stack CardKB I2C键盘驱动绑定
+
+必需属性：
+- compatible: 必须是 "keyboard-i2c"
+- reg: I2C设备地址
+
+示例：
+    keyboard@5f {
+        compatible = "keyboard-i2c";
+        reg = <0x5f>;
+    }; 
