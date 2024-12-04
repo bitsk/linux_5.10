@@ -28,6 +28,15 @@
 #define POLL_INTERVAL_MS 20   // 增加轮询间隔到20ms
 #define MAX_RETRIES 3  // 最大重试次数
 
+#define DEBUG_I2C 1  // 专门用于I2C调试的开关
+
+// 添加I2C调试宏
+#if DEBUG_I2C
+#define i2c_dbg(dev, fmt, ...) \
+    dev_info(dev, "I2C: " fmt, ##__VA_ARGS__)
+#else
+#define i2c_dbg(dev, fmt, ...)
+#endif
 
 struct keyboard_i2c {
     struct i2c_client *client;
@@ -44,34 +53,44 @@ static void keyboard_timer_handler(struct timer_list *t)
     static unsigned long last_read_jiffies;
     static int total_reads;
     static int failed_reads;
-
-    // 记录读取间隔
-    if (last_read_jiffies) {
-        kbd_dbg(&kbd->client->dev, "Read interval: %u ms\n", 
-                jiffies_to_msecs(jiffies - last_read_jiffies));
-    }
-    last_read_jiffies = jiffies;
+    static int consecutive_failures = 0;
 
     if (!mutex_trylock(&kbd->lock)) {
-        kbd_dbg(&kbd->client->dev, "Failed to acquire lock, retrying soon\n");
-        mod_timer(&kbd->timer, 
-            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS/2));
-        return;
+        i2c_dbg(&kbd->client->dev, "Lock busy, skipping read\n");
+        goto restart_timer;
     }
 
     total_reads++;
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
     if (ret < 0) {
         failed_reads++;
+        consecutive_failures++;
+        
+        if (consecutive_failures >= 3) {
+            i2c_dbg(&kbd->client->dev, "Multiple consecutive failures, "
+                    "checking bus status...\n");
+            // 尝试重置I2C总线状态
+            if (i2c_recover_bus(kbd->client->adapter) == 0) {
+                i2c_dbg(&kbd->client->dev, "Bus recovery successful\n");
+            } else {
+                i2c_dbg(&kbd->client->dev, "Bus recovery failed\n");
+            }
+        }
+        
         kbd_err(&kbd->client->dev, 
-                "i2c read failed: %d (total: %d, failed: %d, success rate: %d%%)\n",
-                ret, total_reads, failed_reads, 
-                ((total_reads - failed_reads) * 100) / total_reads);
-        mutex_unlock(&kbd->lock);
-        mod_timer(&kbd->timer, 
-            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
-        return;
+                "I2C read failed: %d (total: %d, failed: %d, consecutive: %d)\n",
+                ret, total_reads, failed_reads, consecutive_failures);
+        goto unlock;
     }
+
+    consecutive_failures = 0;  // 重置连续失败计数
+    
+    if (last_read_jiffies) {
+        i2c_dbg(&kbd->client->dev, "Read interval: %u ms, success rate: %d%%\n",
+                jiffies_to_msecs(jiffies - last_read_jiffies),
+                ((total_reads - failed_reads) * 100) / total_reads);
+    }
+    last_read_jiffies = jiffies;
 
     if (key_data != 0) {
         int key_code;
@@ -133,8 +152,15 @@ static void keyboard_timer_handler(struct timer_list *t)
 
 unlock:
     mutex_unlock(&kbd->lock);
-    mod_timer(&kbd->timer, 
-        jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+restart_timer:
+    if (consecutive_failures > 0) {
+        // 如果有连续失败，增加轮询间隔
+        mod_timer(&kbd->timer, 
+            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS * 2));
+    } else {
+        mod_timer(&kbd->timer, 
+            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+    }
 }
 
 static int keyboard_i2c_probe(struct i2c_client *client,
@@ -144,6 +170,24 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     struct input_dev *input;
     int error;
     int i;
+
+    // 检查I2C适配器状态
+    if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+        dev_err(&client->dev, "I2C functionality check failed!\n");
+        return -ENODEV;
+    }
+
+    i2c_dbg(&client->dev, "Adapter name: %s\n", client->adapter->name);
+    i2c_dbg(&client->dev, "Adapter nr: %d\n", client->adapter->nr);
+    i2c_dbg(&client->dev, "Client address: 0x%02x\n", client->addr);
+
+    // 尝试进行简单的I2C通信测试
+    error = i2c_smbus_read_byte(client);
+    if (error < 0) {
+        dev_err(&client->dev, "I2C communication test failed: %d\n", error);
+        return error;
+    }
+    i2c_dbg(&client->dev, "I2C communication test passed\n");
 
     kbd = devm_kzalloc(&client->dev, sizeof(*kbd), GFP_KERNEL);
     if (!kbd)
@@ -192,8 +236,16 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 
     // 设置I2C客户端参数
-    client->flags |= I2C_CLIENT_WAKE;  // 允许设备唤醒系统
-    client->adapter->retries = 3;      // 设置适配器级别的重试次数
+    client->flags |= I2C_CLIENT_WAKE;
+    client->adapter->retries = 3;
+    client->adapter->timeout = HZ / 5;  // 200ms timeout
+
+    i2c_dbg(&client->dev, "I2C adapter settings:\n");
+    i2c_dbg(&client->dev, "  Retries: %d\n", client->adapter->retries);
+    i2c_dbg(&client->dev, "  Timeout: %d ms\n", 
+            jiffies_to_msecs(client->adapter->timeout));
+    i2c_dbg(&client->dev, "  Functionality flags: 0x%x\n", 
+            client->adapter->functionality);
 
     // 注册输入设备
     error = input_register_device(input);
