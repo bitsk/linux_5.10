@@ -114,6 +114,7 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     struct keyboard_i2c *kbd;
     struct input_dev *input;
     int error;
+    int i;
 
     kbd = devm_kzalloc(&client->dev, sizeof(*kbd), GFP_KERNEL);
     if (!kbd)
@@ -144,7 +145,7 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     __set_bit(KEY_DOWN, input->keybit);
     
     // 设置ASCII字符按键
-    for (int i = 32; i <= 126; i++) {
+    for (i = 32; i <= 126; i++) {
         __set_bit(i, input->keybit);
     }
 
