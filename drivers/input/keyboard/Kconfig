@@ -792,3 +792,6 @@ config KEYBOARD_MTK_PMIC
 	  module will be called pmic-keys.
 
 endif
+
+source "drivers/input/keyboard/gpio_keys.h"
+source "drivers/input/keyboard/i2c/Kconfig"
