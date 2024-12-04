@@ -16,6 +16,7 @@
 #include <linux/pwm.h>
 #include <linux/uaccess.h>
 #include <linux/regulator/consumer.h>
+#include <linux/workqueue.h>
 
 #define SSD1307FB_DATA			0x40
 #define SSD1307FB_COMMAND		0x80
@@ -82,6 +83,9 @@ struct ssd1307fb_par {
 	struct regulator *vbat_reg;
 	u32 vcomh;
 	u32 width;
+	struct workqueue_struct *wq;
+	struct work_struct update_work;
+	bool initialized;
 };
 
 struct ssd1307fb_array {
@@ -152,13 +156,17 @@ static inline int ssd1307fb_write_cmd(struct i2c_client *client, u8 cmd)
 	return ret;
 }
 
-static void ssd1307fb_update_display(struct ssd1307fb_par *par)
+static void ssd1307fb_update_work(struct work_struct *work)
 {
+	struct ssd1307fb_par *par = container_of(work, struct ssd1307fb_par, update_work);
 	struct ssd1307fb_array *array;
 	u8 *vmem = par->info->screen_buffer;
 	unsigned int line_length = par->info->fix.line_length;
 	unsigned int pages = DIV_ROUND_UP(par->height, 8);
 	int i, j, k;
+
+	if (!par->initialized)
+		return;
 
 	array = ssd1307fb_alloc_array(par->width * pages, SSD1307FB_DATA);
 	if (!array)
@@ -214,6 +222,12 @@ static void ssd1307fb_update_display(struct ssd1307fb_par *par)
 	kfree(array);
 }
 
+static void ssd1307fb_update_display(struct ssd1307fb_par *par)
+{
+	if (par->initialized && par->wq) {
+		queue_work(par->wq, &par->update_work);
+	}
+}
 
 static ssize_t ssd1307fb_write(struct fb_info *info, const char __user *buf,
 		size_t count, loff_t *ppos)
@@ -766,7 +780,14 @@ static int ssd1307fb_remove(struct i2c_client *client)
 	struct fb_info *info = i2c_get_clientdata(client);
 	struct ssd1307fb_par *par = info->par;
 
+	par->initialized = false;
+
 	ssd1307fb_write_cmd(par->client, SSD1307FB_DISPLAY_OFF);
+
+	if (par->wq) {
+		flush_workqueue(par->wq);
+		destroy_workqueue(par->wq);
+	}
 
 	backlight_device_unregister(info->bl_dev);
 

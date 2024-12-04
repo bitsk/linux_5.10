@@ -44,13 +44,26 @@ struct keyboard_i2c {
     struct i2c_client *client;
     struct input_dev *input;
     struct timer_list timer;
-    spinlock_t lock;
+    struct workqueue_struct *wq;  // 添加专用工作队列
     struct work_struct recovery_work;
+    struct work_struct read_work;
+    bool initialized;             // 添加初始化标志
 };
 
 static void keyboard_timer_handler(struct timer_list *t)
 {
     struct keyboard_i2c *kbd = from_timer(kbd, t, timer);
+    
+    if (kbd->initialized && kbd->wq) {
+        queue_work(kbd->wq, &kbd->read_work);
+    } else {
+        mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+    }
+}
+
+static void keyboard_read_work(struct work_struct *work)
+{
+    struct keyboard_i2c *kbd = container_of(work, struct keyboard_i2c, read_work);
     u8 key_data;
     int ret;
     static unsigned long last_read_jiffies;
@@ -58,8 +71,8 @@ static void keyboard_timer_handler(struct timer_list *t)
     static int failed_reads;
     static int consecutive_failures = 0;
 
-    unsigned long flags;
-    spin_lock_irqsave(&kbd->lock, flags);
+    if (!kbd->initialized)
+        return;
 
     total_reads++;
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
@@ -68,16 +81,16 @@ static void keyboard_timer_handler(struct timer_list *t)
         consecutive_failures++;
         
         if (consecutive_failures >= 3) {
-            schedule_work(&kbd->recovery_work);
+            queue_work(kbd->wq, &kbd->recovery_work);
         }
         
         kbd_err(&kbd->client->dev, 
                 "I2C read failed: %d (total: %d, failed: %d, consecutive: %d)\n",
                 ret, total_reads, failed_reads, consecutive_failures);
-        goto unlock;
+        goto out;
     }
 
-    consecutive_failures = 0;  // 重置连续失败计数
+    consecutive_failures = 0;
     
     if (last_read_jiffies) {
         i2c_dbg(&kbd->client->dev, "Read interval: %u ms, success rate: %d%%\n",
@@ -131,28 +144,22 @@ static void keyboard_timer_handler(struct timer_list *t)
                 kbd_dbg(&kbd->client->dev, "ASCII character: '%c'\n", key_data);
             } else {
                 kbd_dbg(&kbd->client->dev, "Invalid key data: 0x%02x\n", key_data);
-                goto unlock;
+                goto out;
             }
             break;
         }
 
-        kbd_dbg(&kbd->client->dev, "Reporting key event: code=%d, value=1\n", key_code);
         input_report_key(kbd->input, key_code, 1);
         input_sync(kbd->input);
-        kbd_dbg(&kbd->client->dev, "Reporting key event: code=%d, value=0\n", key_code);
         input_report_key(kbd->input, key_code, 0);
         input_sync(kbd->input);
     }
 
-unlock:
-    spin_unlock_irqrestore(&kbd->lock, flags);
-    
-    if (consecutive_failures > 0) {
+out:
+    if (kbd->initialized) {
         mod_timer(&kbd->timer, 
-            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS * 2));
-    } else {
-        mod_timer(&kbd->timer, 
-            jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+            jiffies + msecs_to_jiffies(consecutive_failures > 0 ? 
+                POLL_INTERVAL_MS * 2 : POLL_INTERVAL_MS));
     }
 }
 
@@ -160,6 +167,9 @@ static void keyboard_recovery_work(struct work_struct *work)
 {
     struct keyboard_i2c *kbd = container_of(work, struct keyboard_i2c, recovery_work);
     
+    if (!kbd->initialized)
+        return;
+
     i2c_dbg(&kbd->client->dev, "Attempting bus recovery...\n");
     if (i2c_recover_bus(kbd->client->adapter) == 0) {
         i2c_dbg(&kbd->client->dev, "Bus recovery successful\n");
@@ -208,8 +218,16 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     // 初始化自旋锁
     spin_lock_init(&kbd->lock);
     
-    // 初始化工作队列
+    // 创建专用工作队列
+    kbd->wq = create_singlethread_workqueue("keyboard_i2c_wq");
+    if (!kbd->wq) {
+        dev_err(&client->dev, "Failed to create workqueue\n");
+        return -ENOMEM;
+    }
+
+    // 初始化工作
     INIT_WORK(&kbd->recovery_work, keyboard_recovery_work);
+    INIT_WORK(&kbd->read_work, keyboard_read_work);
 
     // 设置输入设备参数
     input->name = "M5Stack CardKB";
@@ -288,13 +306,23 @@ static int keyboard_i2c_probe(struct i2c_client *client,
             i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_QUICK) ? "yes" : "no");
 
     kbd_info(&client->dev, "Keyboard initialized successfully\n");
+    kbd->initialized = true;
     return 0;
 }
 
 static int keyboard_i2c_remove(struct i2c_client *client)
 {
     struct keyboard_i2c *kbd = i2c_get_clientdata(client);
+    
+    kbd->initialized = false;  // 防止新的工作被调度
+    
     del_timer_sync(&kbd->timer);
+    
+    if (kbd->wq) {
+        flush_workqueue(kbd->wq);
+        destroy_workqueue(kbd->wq);
+    }
+    
     return 0;
 }
 
