@@ -5,6 +5,8 @@
 #include <linux/mutex.h>
 #include <linux/delay.h>
 #include <linux/random.h>
+#include <linux/spinlock.h>
+#include <linux/workqueue.h>
 
 // 添加调试开关
 #define DEBUG 1
@@ -42,7 +44,8 @@ struct keyboard_i2c {
     struct i2c_client *client;
     struct input_dev *input;
     struct timer_list timer;
-    struct mutex lock;
+    spinlock_t lock;
+    struct work_struct recovery_work;
 };
 
 static void keyboard_timer_handler(struct timer_list *t)
@@ -55,10 +58,8 @@ static void keyboard_timer_handler(struct timer_list *t)
     static int failed_reads;
     static int consecutive_failures = 0;
 
-    if (!mutex_trylock(&kbd->lock)) {
-        i2c_dbg(&kbd->client->dev, "Lock busy, skipping read\n");
-        goto restart_timer;
-    }
+    unsigned long flags;
+    spin_lock_irqsave(&kbd->lock, flags);
 
     total_reads++;
     ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
@@ -67,14 +68,7 @@ static void keyboard_timer_handler(struct timer_list *t)
         consecutive_failures++;
         
         if (consecutive_failures >= 3) {
-            i2c_dbg(&kbd->client->dev, "Multiple consecutive failures, "
-                    "checking bus status...\n");
-            // 尝试重置I2C总线状态
-            if (i2c_recover_bus(kbd->client->adapter) == 0) {
-                i2c_dbg(&kbd->client->dev, "Bus recovery successful\n");
-            } else {
-                i2c_dbg(&kbd->client->dev, "Bus recovery failed\n");
-            }
+            schedule_work(&kbd->recovery_work);
         }
         
         kbd_err(&kbd->client->dev, 
@@ -151,15 +145,26 @@ static void keyboard_timer_handler(struct timer_list *t)
     }
 
 unlock:
-    mutex_unlock(&kbd->lock);
-restart_timer:
+    spin_unlock_irqrestore(&kbd->lock, flags);
+    
     if (consecutive_failures > 0) {
-        // 如果有连续失败，增加轮询间隔
         mod_timer(&kbd->timer, 
             jiffies + msecs_to_jiffies(POLL_INTERVAL_MS * 2));
     } else {
         mod_timer(&kbd->timer, 
             jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+    }
+}
+
+static void keyboard_recovery_work(struct work_struct *work)
+{
+    struct keyboard_i2c *kbd = container_of(work, struct keyboard_i2c, recovery_work);
+    
+    i2c_dbg(&kbd->client->dev, "Attempting bus recovery...\n");
+    if (i2c_recover_bus(kbd->client->adapter) == 0) {
+        i2c_dbg(&kbd->client->dev, "Bus recovery successful\n");
+    } else {
+        i2c_dbg(&kbd->client->dev, "Bus recovery failed\n");
     }
 }
 
@@ -200,8 +205,11 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     kbd->client = client;
     kbd->input = input;
     
-    // 初始化互斥锁
-    mutex_init(&kbd->lock);
+    // 初始化自旋锁
+    spin_lock_init(&kbd->lock);
+    
+    // 初始化工作队列
+    INIT_WORK(&kbd->recovery_work, keyboard_recovery_work);
 
     // 设置输入设备参数
     input->name = "M5Stack CardKB";
