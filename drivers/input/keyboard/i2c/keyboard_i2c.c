@@ -42,7 +42,6 @@ static void keyboard_timer_handler(struct timer_list *t)
     if (key_data != 0) {
         int key_code;
         
-        // 映射自定义键值到标准Linux键值
         switch(key_data) {
         case 180: // 原KEY_LEFT
             key_code = KEY_LEFT;
