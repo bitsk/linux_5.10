@@ -107,7 +107,8 @@ struct keyboard_i2c {
     struct input_dev *input;
     struct timer_list timer;
     struct mutex lock;
-    bool shift_state;  // 添加shift状态跟踪
+    bool shift_state;
+    bool device_present;  // 添加设备存在标志
 };
 
 static void keyboard_timer_handler(struct timer_list *t)
@@ -119,18 +120,31 @@ static void keyboard_timer_handler(struct timer_list *t)
     bool is_upper = false;
 
     if (!mutex_trylock(&kbd->lock)) {
-        mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
-        return;
+        goto reschedule;
     }
 
-    kbd->client->adapter->timeout = HZ/10;
-    
-    ret = i2c_master_recv(kbd->client, &key_data, KEYBOARD_BUF_SIZE);
-    if (ret < 0) {
-        dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
+    // 如果设备不存在，定期检查是否已连接
+    if (!kbd->device_present) {
+        ret = i2c_smbus_read_byte(kbd->client);
+        if (ret >= 0) {
+            kbd->device_present = true;
+            dev_info(&kbd->client->dev, "Keyboard device connected\n");
+        }
         goto unlock;
     }
 
+    // 使用 i2c_smbus_read_byte 替代 i2c_master_recv
+    ret = i2c_smbus_read_byte(kbd->client);
+    if (ret < 0) {
+        if (ret != -ENXIO && ret != -EREMOTEIO) {  // 忽略常见的无设备错误
+            dev_err(&kbd->client->dev, "i2c read failed: %d\n", ret);
+        }
+        kbd->device_present = false;  // 标记设备已断开
+        dev_info(&kbd->client->dev, "Keyboard device disconnected\n");
+        goto unlock;
+    }
+
+    key_data = (u8)ret;
     if (key_data != 0) {
         // 检查是否是大写字母
         if (key_data >= 'A' && key_data <= 'Z') {
@@ -162,6 +176,7 @@ static void keyboard_timer_handler(struct timer_list *t)
 
 unlock:
     mutex_unlock(&kbd->lock);
+reschedule:
     mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 }
 
@@ -173,6 +188,13 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     int error;
     int i;
 
+    // 首先检查设备是否存在
+    error = i2c_smbus_read_byte(client);
+    if (error < 0) {
+        dev_info(&client->dev, "Keyboard device not detected\n");
+        return -ENODEV;  // 设备不存在，返回错误
+    }
+
     kbd = devm_kzalloc(&client->dev, sizeof(*kbd), GFP_KERNEL);
     if (!kbd)
         return -ENOMEM;
@@ -183,6 +205,7 @@ static int keyboard_i2c_probe(struct i2c_client *client,
 
     kbd->client = client;
     kbd->input = input;
+    kbd->device_present = true;  // 设备存在
     
     // 初始化互斥锁
     mutex_init(&kbd->lock);
@@ -219,6 +242,7 @@ static int keyboard_i2c_probe(struct i2c_client *client,
         return error;
     }
 
+    dev_info(&client->dev, "Keyboard device initialized successfully\n");
     i2c_set_clientdata(client, kbd);
     return 0;
 }
