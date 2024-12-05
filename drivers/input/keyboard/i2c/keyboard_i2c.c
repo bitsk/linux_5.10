@@ -167,15 +167,45 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     __set_bit(KEY_UP, input->keybit);
     __set_bit(KEY_DOWN, input->keybit);
     
-    // 设置字母键
-    for (i = KEY_A; i <= KEY_Z; i++) {
-        __set_bit(i, input->keybit);
-    }
+    // 设置字母键 A-Z
+    __set_bit(KEY_A, input->keybit);
+    __set_bit(KEY_B, input->keybit);
+    __set_bit(KEY_C, input->keybit);
+    __set_bit(KEY_D, input->keybit);
+    __set_bit(KEY_E, input->keybit);
+    __set_bit(KEY_F, input->keybit);
+    __set_bit(KEY_G, input->keybit);
+    __set_bit(KEY_H, input->keybit);
+    __set_bit(KEY_I, input->keybit);
+    __set_bit(KEY_J, input->keybit);
+    __set_bit(KEY_K, input->keybit);
+    __set_bit(KEY_L, input->keybit);
+    __set_bit(KEY_M, input->keybit);
+    __set_bit(KEY_N, input->keybit);
+    __set_bit(KEY_O, input->keybit);
+    __set_bit(KEY_P, input->keybit);
+    __set_bit(KEY_Q, input->keybit);
+    __set_bit(KEY_R, input->keybit);
+    __set_bit(KEY_S, input->keybit);
+    __set_bit(KEY_T, input->keybit);
+    __set_bit(KEY_U, input->keybit);
+    __set_bit(KEY_V, input->keybit);
+    __set_bit(KEY_W, input->keybit);
+    __set_bit(KEY_X, input->keybit);
+    __set_bit(KEY_Y, input->keybit);
+    __set_bit(KEY_Z, input->keybit);
     
-    // 设置数字键
-    for (i = KEY_0; i <= KEY_9; i++) {
-        __set_bit(i, input->keybit);
-    }
+    // 设置数字键 0-9
+    __set_bit(KEY_0, input->keybit);
+    __set_bit(KEY_1, input->keybit);
+    __set_bit(KEY_2, input->keybit);
+    __set_bit(KEY_3, input->keybit);
+    __set_bit(KEY_4, input->keybit);
+    __set_bit(KEY_5, input->keybit);
+    __set_bit(KEY_6, input->keybit);
+    __set_bit(KEY_7, input->keybit);
+    __set_bit(KEY_8, input->keybit);
+    __set_bit(KEY_9, input->keybit);
 
     // 设置符号键
     __set_bit(KEY_SPACE, input->keybit);
@@ -191,10 +221,19 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     __set_bit(KEY_DOT, input->keybit);
     __set_bit(KEY_SLASH, input->keybit);
 
-    // 设置功能键(F1-F12)
-    for (i = KEY_F1; i <= KEY_F12; i++) {
-        __set_bit(i, input->keybit);
-    }
+    // 设置功能键 F1-F12
+    __set_bit(KEY_F1, input->keybit);
+    __set_bit(KEY_F2, input->keybit);
+    __set_bit(KEY_F3, input->keybit);
+    __set_bit(KEY_F4, input->keybit);
+    __set_bit(KEY_F5, input->keybit);
+    __set_bit(KEY_F6, input->keybit);
+    __set_bit(KEY_F7, input->keybit);
+    __set_bit(KEY_F8, input->keybit);
+    __set_bit(KEY_F9, input->keybit);
+    __set_bit(KEY_F10, input->keybit);
+    __set_bit(KEY_F11, input->keybit);
+    __set_bit(KEY_F12, input->keybit);
 
     // 初始化定时器
     timer_setup(&kbd->timer, keyboard_timer_handler, 0);
