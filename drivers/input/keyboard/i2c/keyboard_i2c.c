@@ -38,14 +38,6 @@ static const unsigned short keycode_map[256] = {
     ['u'] = KEY_U, ['v'] = KEY_V, ['w'] = KEY_W, ['x'] = KEY_X, ['y'] = KEY_Y,
     ['z'] = KEY_Z,
     
-    // 字母键(大写)
-    ['A'] = KEY_A, ['B'] = KEY_B, ['C'] = KEY_C, ['D'] = KEY_D, ['E'] = KEY_E,
-    ['F'] = KEY_F, ['G'] = KEY_G, ['H'] = KEY_H, ['I'] = KEY_I, ['J'] = KEY_J,
-    ['K'] = KEY_K, ['L'] = KEY_L, ['M'] = KEY_M, ['N'] = KEY_N, ['O'] = KEY_O,
-    ['P'] = KEY_P, ['Q'] = KEY_Q, ['R'] = KEY_R, ['S'] = KEY_S, ['T'] = KEY_T,
-    ['U'] = KEY_U, ['V'] = KEY_V, ['W'] = KEY_W, ['X'] = KEY_X, ['Y'] = KEY_Y,
-    ['Z'] = KEY_Z,
-    
     // 符号键
     ['-']  = KEY_MINUS,
     ['=']  = KEY_EQUAL,
@@ -80,11 +72,42 @@ static const unsigned short keycode_map[256] = {
     [139] = KEY_F12,
 };
 
+// 在文件开头添加按键定义
+static const unsigned int keyboard_keys[] = {
+    // 功能键
+    KEY_ESC, KEY_BACKSPACE, KEY_TAB, KEY_ENTER,
+    KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN,
+    
+    // 字母键 A-Z
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E,
+    KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+    KEY_K, KEY_L, KEY_M, KEY_N, KEY_O,
+    KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+    KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+    
+    // 数字键 0-9
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+    KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    
+    // 符号键
+    KEY_SPACE, KEY_MINUS, KEY_EQUAL,
+    KEY_LEFTBRACE, KEY_RIGHTBRACE,
+    KEY_SEMICOLON, KEY_APOSTROPHE,
+    KEY_GRAVE, KEY_BACKSLASH,
+    KEY_COMMA, KEY_DOT, KEY_SLASH,
+    
+    // 功能键 F1-F12
+    KEY_F1, KEY_F2, KEY_F3, KEY_F4,
+    KEY_F5, KEY_F6, KEY_F7, KEY_F8,
+    KEY_F9, KEY_F10, KEY_F11, KEY_F12,
+};
+
 struct keyboard_i2c {
     struct i2c_client *client;
     struct input_dev *input;
     struct timer_list timer;
     struct mutex lock;
+    bool shift_state;  // 添加shift状态跟踪
 };
 
 static void keyboard_timer_handler(struct timer_list *t)
@@ -93,6 +116,7 @@ static void keyboard_timer_handler(struct timer_list *t)
     u8 key_data;
     int ret;
     unsigned short key_code;
+    bool is_upper = false;
 
     if (!mutex_trylock(&kbd->lock)) {
         mod_timer(&kbd->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
@@ -108,12 +132,31 @@ static void keyboard_timer_handler(struct timer_list *t)
     }
 
     if (key_data != 0) {
+        // 检查是否是大写字母
+        if (key_data >= 'A' && key_data <= 'Z') {
+            is_upper = true;
+            key_data = key_data - 'A' + 'a';  // 转换为小写
+        }
+
         key_code = keycode_map[key_data];
         if (key_code) {
+            if (is_upper) {
+                // 按下shift
+                input_report_key(kbd->input, KEY_LEFTSHIFT, 1);
+                input_sync(kbd->input);
+            }
+
+            // 报告按键
             input_report_key(kbd->input, key_code, 1);
             input_sync(kbd->input);
             input_report_key(kbd->input, key_code, 0);
             input_sync(kbd->input);
+
+            if (is_upper) {
+                // 释放shift
+                input_report_key(kbd->input, KEY_LEFTSHIFT, 0);
+                input_sync(kbd->input);
+            }
         }
     }
 
@@ -157,83 +200,13 @@ static int keyboard_i2c_probe(struct i2c_client *client,
     // 设置支持的按键类型
     __set_bit(EV_KEY, input->evbit);
     
-    // 设置功能键
-    __set_bit(KEY_ESC, input->keybit);
-    __set_bit(KEY_BACKSPACE, input->keybit);
-    __set_bit(KEY_TAB, input->keybit);
-    __set_bit(KEY_ENTER, input->keybit);
-    __set_bit(KEY_LEFT, input->keybit);
-    __set_bit(KEY_RIGHT, input->keybit);
-    __set_bit(KEY_UP, input->keybit);
-    __set_bit(KEY_DOWN, input->keybit);
-    
-    // 设置字母键 A-Z
-    __set_bit(KEY_A, input->keybit);
-    __set_bit(KEY_B, input->keybit);
-    __set_bit(KEY_C, input->keybit);
-    __set_bit(KEY_D, input->keybit);
-    __set_bit(KEY_E, input->keybit);
-    __set_bit(KEY_F, input->keybit);
-    __set_bit(KEY_G, input->keybit);
-    __set_bit(KEY_H, input->keybit);
-    __set_bit(KEY_I, input->keybit);
-    __set_bit(KEY_J, input->keybit);
-    __set_bit(KEY_K, input->keybit);
-    __set_bit(KEY_L, input->keybit);
-    __set_bit(KEY_M, input->keybit);
-    __set_bit(KEY_N, input->keybit);
-    __set_bit(KEY_O, input->keybit);
-    __set_bit(KEY_P, input->keybit);
-    __set_bit(KEY_Q, input->keybit);
-    __set_bit(KEY_R, input->keybit);
-    __set_bit(KEY_S, input->keybit);
-    __set_bit(KEY_T, input->keybit);
-    __set_bit(KEY_U, input->keybit);
-    __set_bit(KEY_V, input->keybit);
-    __set_bit(KEY_W, input->keybit);
-    __set_bit(KEY_X, input->keybit);
-    __set_bit(KEY_Y, input->keybit);
-    __set_bit(KEY_Z, input->keybit);
-    
-    // 设置数字键 0-9
-    __set_bit(KEY_0, input->keybit);
-    __set_bit(KEY_1, input->keybit);
-    __set_bit(KEY_2, input->keybit);
-    __set_bit(KEY_3, input->keybit);
-    __set_bit(KEY_4, input->keybit);
-    __set_bit(KEY_5, input->keybit);
-    __set_bit(KEY_6, input->keybit);
-    __set_bit(KEY_7, input->keybit);
-    __set_bit(KEY_8, input->keybit);
-    __set_bit(KEY_9, input->keybit);
+    // 注册所有支持的按键
+    for (i = 0; i < ARRAY_SIZE(keyboard_keys); i++) {
+        __set_bit(keyboard_keys[i], input->keybit);
+    }
 
-    // 设置符号键
-    __set_bit(KEY_SPACE, input->keybit);
-    __set_bit(KEY_MINUS, input->keybit);
-    __set_bit(KEY_EQUAL, input->keybit);
-    __set_bit(KEY_LEFTBRACE, input->keybit);
-    __set_bit(KEY_RIGHTBRACE, input->keybit);
-    __set_bit(KEY_SEMICOLON, input->keybit);
-    __set_bit(KEY_APOSTROPHE, input->keybit);
-    __set_bit(KEY_GRAVE, input->keybit);
-    __set_bit(KEY_BACKSLASH, input->keybit);
-    __set_bit(KEY_COMMA, input->keybit);
-    __set_bit(KEY_DOT, input->keybit);
-    __set_bit(KEY_SLASH, input->keybit);
-
-    // 设置功能键 F1-F12
-    __set_bit(KEY_F1, input->keybit);
-    __set_bit(KEY_F2, input->keybit);
-    __set_bit(KEY_F3, input->keybit);
-    __set_bit(KEY_F4, input->keybit);
-    __set_bit(KEY_F5, input->keybit);
-    __set_bit(KEY_F6, input->keybit);
-    __set_bit(KEY_F7, input->keybit);
-    __set_bit(KEY_F8, input->keybit);
-    __set_bit(KEY_F9, input->keybit);
-    __set_bit(KEY_F10, input->keybit);
-    __set_bit(KEY_F11, input->keybit);
-    __set_bit(KEY_F12, input->keybit);
+    // 添加对SHIFT键的支持
+    __set_bit(KEY_LEFTSHIFT, input->keybit);
 
     // 初始化定时器
     timer_setup(&kbd->timer, keyboard_timer_handler, 0);
