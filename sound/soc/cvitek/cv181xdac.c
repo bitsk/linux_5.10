@@ -332,6 +332,7 @@ static long dac_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct cvi_vol_ctrl vol;
 	u32 val;
 	u32 temp;
+	u32 ramp;
 
 	if (argp != NULL) {
 		if (!copy_from_user(&val, argp, sizeof(val))) {
